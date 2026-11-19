@@ -108,3 +108,37 @@ jobs:
           gh release create "v$VERSION" \
             qnap-manager-android.apk qnap-manager-windows.zip \
             --title "v$VERSION" --notes "$NOTES"
+
+  # 빌드 결과를 builds 브랜치에 버전 폴더(v1.0.N/)로 저장한다.
+  # 작업 폴더에서 `python3 tools/buildstore.py fetch` 로 받아갈 수 있다.
+  # 한쪽(Android/Windows)만 성공해도 저장한다.
+  publish-builds:
+    needs: [android, windows]
+    if: ${{ always() && (needs.android.result == 'success' || needs.windows.result == 'success') }}
+    runs-on: ubuntu-latest
+    concurrency: builds-branch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: new
+          merge-multiple: true
+      - name: builds 브랜치 갱신
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MSG=$(git log -1 --pretty=%s)
+          mkdir store
+          if git fetch --depth 1 origin builds; then
+            git archive FETCH_HEAD | tar -x -C store
+          fi
+          python3 tools/buildstore.py add store new \
+            --version "$VERSION" --commit "${GITHUB_SHA::7}" --message "$MSG" --keep 3
+          cd store
+          git init -q -b builds
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -qm "builds: v$VERSION"
+          # 저장소가 커지지 않도록 항상 커밋 하나로 덮어쓴다 (이전 버전은 Releases에 있음)
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" builds

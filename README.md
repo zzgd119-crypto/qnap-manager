@@ -61,6 +61,25 @@
 
 어떤 기능이 안 되면 **설정 → API 진단 → 진단 실행 → 복사**를 눌러 결과를 전달해 주세요. NAS 펌웨어나 앱 버전마다 API 응답이 조금씩 달라서 이 결과로 바로 고칠 수 있습니다. 세션 ID는 자동으로 지워집니다.
 
+## 버전 관리
+
+- 버전은 `1.0.N` 형식이며, N은 GitHub Actions 빌드 번호입니다. main에 푸시할 때마다 1씩 올라갑니다.
+- 각 버전은 GitHub **Releases**에 `vX.Y.Z` 태그로 남습니다.
+- 빌드가 끝나면 결과물이 `builds` 브랜치에 버전 폴더로 올라갑니다 (최근 3개 유지).
+- 작업 폴더로 받으려면 다음을 실행합니다. 받은 버전은 `dist/`에 계속 쌓입니다.
+
+```bash
+python3 tools/buildstore.py fetch
+```
+
+```
+dist/
+  v1.0.1/  qnap-manager-android.apk, qnap-manager-windows.zip, SHA256SUMS.txt, version.json
+  v1.0.2/  …
+  latest/  가장 최근 버전 복사본
+  VERSIONS.md  버전 목록
+```
+
 ## 개발
 
 ```bash
