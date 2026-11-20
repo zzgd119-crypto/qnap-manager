@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
+import '../api/container_api.dart';
 import '../app_state.dart';
 import '../update/updater.dart';
 import '../widgets/common.dart';
@@ -192,8 +193,6 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     ('디스크 SMART', '/cgi-bin/disk/qsmart.cgi', {'func': 'all_hd_data'}),
     ('공유 폴더', '/cgi-bin/filemanager/utilRequest.cgi',
         {'func': 'get_tree', 'is_iso': '0', 'node': 'share_root'}),
-    ('Container Station (신)', '/container-station/api/v1/container', {}),
-    ('Container Station (구)', '/containerstation/api/v1/container', {}),
     ('Download Station', '/downloadstation/V4/Task/Query',
         {'from': '0', 'limit': '5', 'status': 'all', 'type': 'all'}),
   ];
@@ -216,6 +215,11 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         _results[name] = '오류: $e';
       }
       if (mounted) setState(() {});
+    }
+    try {
+      _results['Container Station'] = await ContainerApi(c).diagnose();
+    } catch (e) {
+      _results['Container Station'] = '오류: $e';
     }
     if (mounted) setState(() => _running = false);
   }

@@ -79,5 +79,16 @@ void main() {
     expect(b.single.name, 'nginx');
     expect(b.single.type, 'docker');
     expect(b.single.running, false);
+    // Container Station 3 v3 형식
+    final c = ContainerApi.parseList({
+      'data': {
+        'items': [
+          {'id': 'c1', 'name': 'homeassistant', 'type': 'docker', 'image': 'ha', 'status': 'running', 'project': 'ha'}
+        ]
+      }
+    });
+    expect(c.single.name, 'homeassistant');
+    expect(c.single.running, true);
+    expect(c.single.project, 'ha');
   });
 }
