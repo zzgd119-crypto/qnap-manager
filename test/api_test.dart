@@ -91,4 +91,12 @@ void main() {
     expect(c.single.running, true);
     expect(c.single.project, 'ha');
   });
+
+  test('이미지 이름 분리', () {
+    expect(ContainerApi.splitImage('ghcr.io/zzgd119-crypto/triplog:latest'),
+        ('ghcr.io/zzgd119-crypto/triplog', 'latest'));
+    expect(ContainerApi.splitImage('linuxserver/sabnzbd'), ('linuxserver/sabnzbd', 'latest'));
+    expect(ContainerApi.splitImage('localhost:5000/app:1.2'), ('localhost:5000/app', '1.2'));
+    expect(ContainerApi.splitImage('nginx@sha256:abc'), ('nginx', 'latest'));
+  });
 }

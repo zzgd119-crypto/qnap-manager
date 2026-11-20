@@ -241,6 +241,150 @@ class ContainerApi {
     return body;
   }
 
+  // ---------------- 이미지 당기기 / 애플리케이션 재생성 ----------------
+
+  /// "ghcr.io/a/b:latest" → ("ghcr.io/a/b", "latest")
+  static (String, String) splitImage(String image) {
+    final at = image.indexOf('@');
+    final base = at >= 0 ? image.substring(0, at) : image;
+    final slash = base.lastIndexOf('/');
+    final colon = base.lastIndexOf(':');
+    if (colon > slash) {
+      return (base.substring(0, colon), base.substring(colon + 1));
+    }
+    return (base, 'latest');
+  }
+
+  int? _pullPattern;
+
+  static List<(String, Object)> _pullCandidates(String image) {
+    final (repo, tag) = splitImage(image);
+    final slash = repo.indexOf('/');
+    final hasRegistry = slash > 0 &&
+        (repo.substring(0, slash).contains('.') ||
+            repo.substring(0, slash).contains(':'));
+    return [
+      ('/v3/images/pull', {'image': '$repo:$tag'}),
+      ('/v3/images/pull', {'data': {'image': repo, 'tag': tag}}),
+      ('/v1/background/image_download', {
+        'type': 'docker',
+        'repository': hasRegistry ? repo.substring(0, slash) : '',
+        'image': hasRegistry ? repo.substring(slash + 1) : repo,
+        'tag': tag,
+      }),
+    ];
+  }
+
+  /// 이미지를 레지스트리에서 다시 받는다. 작업 ID가 있으면 반환한다.
+  Future<String?> pullImage(String image) async {
+    if (_prefix == null) await _connect();
+    final cands = _pullCandidates(image);
+    final order = _pullPattern == null
+        ? List.generate(cands.length, (i) => i)
+        : [_pullPattern!, ...List.generate(cands.length, (i) => i)];
+    final tried = <String>[];
+    for (final i in order.toSet()) {
+      final (path, body) = cands[i];
+      var res = await _send('POST', '$_prefix$path', body: body);
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        await _login(_prefix!);
+        res = await _send('POST', '$_prefix$path', body: body);
+      }
+      if (res.statusCode == 404 || res.statusCode == 405) {
+        tried.add('$path → ${res.statusCode}');
+        continue;
+      }
+      if (res.statusCode == 400 && i < cands.length - 1) {
+        tried.add('$path → 400 ${_short(res.body)}');
+        continue; // 형식이 다를 수 있어 다음 후보로
+      }
+      if (res.statusCode >= 400) {
+        throw ApiException(
+            '이미지 당기기 실패 (HTTP ${res.statusCode}) ${_short(res.body)}');
+      }
+      _pullPattern = i;
+      return _taskId(res.body);
+    }
+    throw ApiException('이 Container Station 버전의 이미지 당기기 API를 찾지 못했습니다.\n'
+        '${tried.join('\n')}');
+  }
+
+  /// 애플리케이션(compose) 정보: yml, 리소스 제한, 기본 URL
+  Future<Map> inspectApp(String name) async {
+    final res = await _request(
+        'GET', '/v3/apps/${Uri.encodeComponent(name)}/inspect');
+    final j = jsonDecode(utf8.decode(res.bodyBytes));
+    final d = j is Map ? (j['data'] ?? j) : null;
+    if (d is! Map || d['yml'] == null) {
+      throw ApiException('애플리케이션 정보를 읽지 못했습니다: ${_short(res.body)}');
+    }
+    return d;
+  }
+
+  /// Container Station 의 "재생성"과 같다: 현재 yml 로 애플리케이션을 다시 만든다.
+  Future<String?> recreateApp(String name) async {
+    final d = await inspectApp(name);
+    final url = d['defaultURL'] is Map ? d['defaultURL'] as Map : const {};
+    final body = {
+      'name': name,
+      'yml': d['yml'],
+      'operation': 'recreate',
+      'default_url': {
+        'port': url['port'] ?? 0,
+        'service': url['service'] ?? '',
+      },
+      'cpu_limit': d['cpuLimit'] ?? 0,
+      'mem_limit': d['memLimit'] ?? 0,
+      'mem_reservation': d['memReservation'] ?? 0,
+      'last_updated': '${d['lastUpdated'] ?? d['last_updated'] ?? ''}',
+    };
+    final res = await _request('POST', '/v3/apps/compose', body: body);
+    return _taskId(res.body);
+  }
+
+  static String? _taskId(String body) {
+    try {
+      final j = jsonDecode(body);
+      if (j is Map) {
+        final d = j['data'];
+        final id = (d is Map ? (d['taskID'] ?? d['taskId'] ?? d['id']) : null) ??
+            j['taskID'] ?? j['taskId'];
+        return id?.toString();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// 백그라운드 작업이 끝날 때까지 기다린다. onUpdate(진행률, 설명)
+  Future<void> waitTask(String taskId,
+      {void Function(int progress, String text)? onUpdate,
+      Duration timeout = const Duration(minutes: 20)}) async {
+    final end = DateTime.now().add(timeout);
+    var notFound = 0;
+    while (DateTime.now().isBefore(end)) {
+      final res = await _request('GET', '/v3/tasks');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      final items = (j is Map && j['data'] is Map ? j['data']['items'] : null)
+              as List? ??
+          const [];
+      final t = items.whereType<Map>().where((e) => '${e['id']}' == taskId).firstOrNull;
+      if (t == null) {
+        // 끝난 작업은 목록에서 빠지기도 한다
+        if (++notFound >= 3) return;
+      } else {
+        final state = '${t['state']}'.toLowerCase();
+        onUpdate?.call(int.tryParse('${t['progress']}') ?? 0,
+            '${t['description'] ?? ''} ${t['detail'] ?? ''}'.trim());
+        if (state == 'completed' || state == 'done' || state == 'success') return;
+        if (state.contains('fail') || state.contains('error') || state == 'canceled') {
+          throw ApiException('작업 실패: ${t['detail'] ?? t['description'] ?? state}');
+        }
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+    throw ApiException('작업이 제한 시간 안에 끝나지 않았습니다 (Container Station에서 확인하세요)');
+  }
+
   /// 진단 화면용: 로그인과 각 목록 경로의 원본 응답
   Future<String> diagnose() async {
     final b = StringBuffer();
@@ -255,6 +399,13 @@ class ContainerApi {
           if (r.statusCode == 200 && _looksJson(r.body)) {
             final first = parseList(jsonDecode(r.body)).firstOrNull;
             if (first != null) {
+              if (first.project.isNotEmpty) {
+                final ar = await _send('GET',
+                    '$prefix/v3/apps/${Uri.encodeComponent(first.project)}/inspect');
+                b.writeln('앱 inspect: HTTP ${ar.statusCode} ${_short(ar.body).length > 80 ? '${_short(ar.body).substring(0, 80)}…' : _short(ar.body)}');
+              }
+              final tr = await _send('GET', '$prefix/v3/tasks');
+              b.writeln('작업 목록: HTTP ${tr.statusCode}');
               for (final lp in _logCandidates(first)) {
                 final lr = await _send('GET', '$prefix$lp');
                 b.writeln('로그 ${lp.replaceAll(first.id, '{id}')}: HTTP ${lr.statusCode} ${_short(lr.body).length > 80 ? '${_short(lr.body).substring(0, 80)}…' : _short(lr.body)}');
