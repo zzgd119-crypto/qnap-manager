@@ -191,15 +191,51 @@ class ContainerApi {
     }
   }
 
+  String? _logsPattern; // 동작 확인된 로그 경로 형식
+
+  static List<String> _logCandidates(ContainerInfo ct) => [
+        '/v3/containers/${ct.type}/logs?id=${ct.id}&tail=300',
+        '/v3/containers/${ct.type}/${ct.id}/logs?tail=300',
+        '/v3/containers/logs?id=${ct.id}&type=${ct.type}&tail=300',
+        '/v1/container/${ct.type}/${ct.id}/logs?tail=300',
+      ];
+
+  /// Container Station 3 는 버전마다 로그 경로가 달라 후보를 차례로 시도한다.
   Future<String> logs(ContainerInfo ct) async {
     if (_prefix == null) await _connect();
-    final res = await _request(
-        'GET', '/v1/container/${ct.type}/${ct.id}/logs?tail=300');
-    final body = utf8.decode(res.bodyBytes, allowMalformed: true);
+    final candidates = _logCandidates(ct);
+    final ordered = _logsPattern == null
+        ? candidates
+        : [candidates[int.parse(_logsPattern!)], ...candidates];
+    for (final path in ordered) {
+      var res = await _send('GET', '$_prefix$path');
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        await _login(_prefix!);
+        res = await _send('GET', '$_prefix$path');
+      }
+      if (res.statusCode == 404 || res.statusCode == 405) continue;
+      if (res.statusCode >= 400) {
+        throw ApiException(
+            'Container Station 오류 (HTTP ${res.statusCode}) ${_short(res.body)}');
+      }
+      _logsPattern = '${candidates.indexOf(path)}';
+      return _extractLogs(utf8.decode(res.bodyBytes, allowMalformed: true));
+    }
+    throw ApiException(
+        '이 Container Station 버전에서 로그 API를 찾지 못했습니다.\n'
+        '설정 → API 진단 결과를 보내 주시면 맞춰 고치겠습니다.');
+  }
+
+  static String _extractLogs(String body) {
     try {
-      final j = jsonDecode(body);
+      dynamic j = jsonDecode(body);
+      if (j is Map && j['data'] != null) j = j['data'];
       if (j is String) return j;
-      if (j is Map) return '${j['logs'] ?? j['data'] ?? j['result'] ?? body}';
+      if (j is Map) {
+        final v = j['logs'] ?? j['log'] ?? j['items'] ?? j['result'];
+        if (v is List) return v.join('\n');
+        if (v != null) return '$v';
+      }
       if (j is List) return j.join('\n');
     } catch (_) {}
     return body;
@@ -216,6 +252,15 @@ class ContainerApi {
         for (final p in ['/v1/container', '/v3/containers']) {
           final r = await _send('GET', '$prefix$p');
           b.writeln('GET $p: HTTP ${r.statusCode} ${_short(r.body)}');
+          if (r.statusCode == 200 && _looksJson(r.body)) {
+            final first = parseList(jsonDecode(r.body)).firstOrNull;
+            if (first != null) {
+              for (final lp in _logCandidates(first)) {
+                final lr = await _send('GET', '$prefix$lp');
+                b.writeln('로그 ${lp.replaceAll(first.id, '{id}')}: HTTP ${lr.statusCode} ${_short(lr.body).length > 80 ? '${_short(lr.body).substring(0, 80)}…' : _short(lr.body)}');
+              }
+            }
+          }
         }
       } on _NotFound {
         b.writeln('login: 404 (이 경로 없음)');

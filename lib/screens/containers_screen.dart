@@ -108,7 +108,13 @@ class _ContainersScreenState extends State<ContainersScreen> {
               leading: Icon(Icons.circle,
                   size: 14, color: c.running ? Colors.green : Colors.grey),
               title: Text(c.name),
-              subtitle: Text('${c.image}\n${c.state}', maxLines: 2),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(c.image, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(c.project.isNotEmpty ? '${c.state} · ${c.project}' : c.state),
+                ],
+              ),
               isThreeLine: true,
               onTap: () => _logs(c),
               trailing: _busy.contains(c.id)
