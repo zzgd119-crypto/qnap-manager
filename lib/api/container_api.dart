@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../util/compose_yaml.dart';
 import 'qnap_client.dart';
 
 class ContainerInfo {
@@ -322,12 +323,16 @@ class ContainerApi {
   }
 
   /// Container Station 의 "재생성"과 같다: 현재 yml 로 애플리케이션을 다시 만든다.
-  Future<String?> recreateApp(String name) async {
+  /// [pullLatest] 이면 yml 의 서비스에 pull_policy: always 를 넣어
+  /// 재생성하면서 최신 이미지를 받게 한다 (yml 에 그대로 저장됨).
+  Future<String?> recreateApp(String name, {bool pullLatest = false}) async {
     final d = await inspectApp(name);
+    var yml = '${d['yml']}';
+    if (pullLatest) yml = ensurePullAlways(yml);
     final url = d['defaultURL'] is Map ? d['defaultURL'] as Map : const {};
     final body = {
       'name': name,
-      'yml': d['yml'],
+      'yml': yml,
       'operation': 'recreate',
       'default_url': {
         'port': url['port'] ?? 0,

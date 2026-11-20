@@ -141,13 +141,18 @@ class _ContainersScreenState extends State<ContainersScreen> {
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('현재 설정(yml)으로 애플리케이션의 컨테이너를 다시 만듭니다. '
                 '볼륨에 저장된 데이터는 유지되고, 잠깐 서비스가 중단됩니다.'),
+            const SizedBox(height: 4),
+            Text('이미지: ${images.join(', ')}', style: const TextStyle(fontSize: 12)),
             const SizedBox(height: 8),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               value: pull,
               onChanged: (v) => setLocal(() => pull = v ?? false),
-              title: const Text('최신 이미지 먼저 당기기'),
-              subtitle: Text(images.join('\n'), style: const TextStyle(fontSize: 12)),
+              title: const Text('최신 이미지로 재생성'),
+              subtitle: const Text(
+                  '레지스트리에서 최신 이미지를 받아 재생성합니다. '
+                  '이를 위해 yml의 각 서비스에 pull_policy: always 가 추가됩니다.',
+                  style: TextStyle(fontSize: 12)),
             ),
           ]),
           actions: [
@@ -159,9 +164,8 @@ class _ContainersScreenState extends State<ContainersScreen> {
     );
     if (ok != true) return;
     await _runSteps('$app 재생성', [
-      if (pull)
-        for (final img in images) ('$img 받는 중', () => api.pullImage(img)),
-      ('$app 재생성 중', () => api.recreateApp(app)),
+      (pull ? '최신 이미지 받고 재생성 중' : '$app 재생성 중',
+          () => api.recreateApp(app, pullLatest: pull)),
     ]);
   }
 
@@ -288,7 +292,8 @@ class _ContainersScreenState extends State<ContainersScreen> {
                       case 'logs':
                         _logs(c);
                       case 'pull':
-                        _pull(c);
+                        // 앱 소속이면 "최신 이미지로 재생성"이 확실한 방법
+                        app != null ? _recreate(app, members!) : _pull(c);
                       case 'recreate':
                         _recreate(app!, members!);
                     }
@@ -303,7 +308,9 @@ class _ContainersScreenState extends State<ContainersScreen> {
                         child: ListTile(leading: Icon(Icons.article_outlined), title: Text('로그'))),
                     const PopupMenuItem(
                         value: 'pull',
-                        child: ListTile(leading: Icon(Icons.cloud_download_outlined), title: Text('이미지 당기기'))),
+                        child: ListTile(
+                            leading: Icon(Icons.cloud_download_outlined),
+                            title: Text('이미지 당기기 (최신 버전으로)'))),
                     if (app != null)
                       PopupMenuItem(
                           value: 'recreate',
