@@ -374,7 +374,7 @@ class ContainerApi {
           const [];
       final t = items.whereType<Map>().where((e) => '${e['id']}' == taskId).firstOrNull;
       if (t == null) {
-        // 끝난 작업은 목록에서 빠지기도 한다
+        // 끝난 작업은 목록에서 빠지기도 한다. 성공 여부는 호출한 쪽에서 다시 확인한다.
         if (++notFound >= 3) return;
       } else {
         final state = '${t['state']}'.toLowerCase();

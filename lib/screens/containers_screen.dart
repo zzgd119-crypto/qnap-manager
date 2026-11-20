@@ -6,6 +6,9 @@ import '../api/container_api.dart';
 import '../api/qnap_client.dart';
 import '../widgets/common.dart';
 
+/// 재생성/이미지 당기기는 앱이 삭제되는 문제가 확인되어 정확한 API 확인 전까지 막아 둔다.
+const kRecreateEnabled = false;
+
 class ContainersScreen extends StatefulWidget {
   const ContainersScreen({super.key, required this.client});
   final QnapClient client;
@@ -119,6 +122,22 @@ class _ContainersScreenState extends State<ContainersScreen> {
   }
 
   Future<void> _pull(ContainerInfo c) async {
+    if (!kRecreateEnabled) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('일시 중지된 기능'),
+          content: const Text('재생성 중 애플리케이션이 삭제되는 문제가 확인되어 '
+              '이 기능을 잠시 막아 두었습니다.\n\n'
+              '정확한 요청 형식을 확인해 고친 뒤 다시 열겠습니다. '
+              '그동안은 Container Station 화면에서 재생성해 주세요.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+          ],
+        ),
+      );
+      return;
+    }
     if (!await confirm(context, '이미지 당기기',
         '${c.image}\n\n레지스트리에서 이 이미지를 다시 받습니다.\n'
             '실행 중인 컨테이너에 반영하려면 받은 뒤 재생성해야 합니다.',
@@ -131,6 +150,22 @@ class _ContainersScreenState extends State<ContainersScreen> {
   }
 
   Future<void> _recreate(String app, List<ContainerInfo> members) async {
+    if (!kRecreateEnabled) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('일시 중지된 기능'),
+          content: const Text('재생성 중 애플리케이션이 삭제되는 문제가 확인되어 '
+              '이 기능을 잠시 막아 두었습니다.\n\n'
+              '정확한 요청 형식을 확인해 고친 뒤 다시 열겠습니다. '
+              '그동안은 Container Station 화면에서 재생성해 주세요.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
+          ],
+        ),
+      );
+      return;
+    }
     var pull = true;
     final images = members.map((c) => c.image).where((i) => i.isNotEmpty).toSet().toList();
     final ok = await showDialog<bool>(
