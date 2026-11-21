@@ -390,6 +390,127 @@ class ContainerApi {
     throw ApiException('작업이 제한 시간 안에 끝나지 않았습니다 (Container Station에서 확인하세요)');
   }
 
+  // ---------------- Container Station 화면 코드 분석 (읽기 전용) ----------------
+
+  /// NAS 의 Container Station 웹 화면(JS)을 내려받아, 이미지 Pull·재생성 등에 쓰는
+  /// 실제 API 경로와 요청 형식을 찾는다. GET 요청만 보낸다.
+  Future<String> analyzeWebUi({void Function(String)? onStatus}) async {
+    final out = StringBuffer('Container Station 화면 분석\n');
+    if (_prefix == null) {
+      try {
+        await _connect();
+      } catch (e) {
+        out.writeln('로그인: $e');
+      }
+    }
+    Future<http.Response> get(Uri u) async {
+      final req = http.Request('GET', u)..headers.addAll(_headers);
+      final r = await c.client.send(req).timeout(const Duration(seconds: 60));
+      return http.Response.fromStream(r);
+    }
+
+    // 1) 화면 HTML 찾기
+    Uri? indexUri;
+    var html = '';
+    for (final path in [
+      '/container-station/',
+      '/container-station/index.html',
+      '/containerstation/'
+    ]) {
+      try {
+        final u = Uri.parse('${c.baseUrl}$path');
+        final r = await get(u);
+        out.writeln('GET $path → ${r.statusCode} (${r.bodyBytes.length} B)');
+        if (r.statusCode == 200 && r.body.contains('<script')) {
+          indexUri = u;
+          html = r.body;
+          break;
+        }
+      } catch (e) {
+        out.writeln('GET $path → 오류 $e');
+      }
+    }
+    if (indexUri == null) {
+      out.writeln('화면 HTML을 찾지 못했습니다.');
+      return out.toString();
+    }
+
+    // 2) 스크립트 모으기 (HTML 의 script/modulepreload + JS 안의 .js 참조)
+    final queue = <Uri>[];
+    final seen = <String>{};
+    void addRef(Uri from, String ref) {
+      if (!ref.endsWith('.js')) return;
+      if (ref.contains('://') && !ref.startsWith(c.baseUrl)) return;
+      final u = from.resolve(ref);
+      if (seen.add(u.toString())) queue.add(u);
+    }
+
+    final scriptTag =
+        RegExp(r'''(?:src|href)\s*=\s*["']([^"'?]+\.js)(?:\?[^"']*)?["']''');
+    for (final m in scriptTag.allMatches(html)) {
+      addRef(indexUri, m.group(1)!);
+    }
+    final jsRef = RegExp(r'''["'`(]((?:\.{0,2}/)?[\w\-./]+?\.js)["'`)]''');
+    final apiPath = RegExp(
+        r'''["'`]((?:/?container-station)?/?(?:api/)?v[0-9]/[A-Za-z0-9_\-/${}.:?=&]{2,120})["'`]''');
+    final keyword = RegExp(r'recreate|pull', caseSensitive: false);
+    final apiHint = RegExp(r'v[13]/|/api/|PUT|POST|\.put\(|\.post\(|method');
+
+    final paths = <String>{};
+    final snippets = <String, List<String>>{'pull': [], 'recreate': []};
+    var totalBytes = 0;
+    var files = 0;
+    while (queue.isNotEmpty && files < 80 && totalBytes < 40 * 1024 * 1024) {
+      final u = queue.removeAt(0);
+      files++;
+      onStatus?.call('스크립트 $files개 분석 중… '
+          '(${u.pathSegments.isEmpty ? u : u.pathSegments.last})');
+      String js;
+      try {
+        final r = await get(u);
+        if (r.statusCode != 200) continue;
+        js = utf8.decode(r.bodyBytes, allowMalformed: true);
+        totalBytes += r.bodyBytes.length;
+      } catch (_) {
+        continue;
+      }
+      for (final m in jsRef.allMatches(js)) {
+        final ref = m.group(1)!;
+        if (ref.contains('/')) addRef(u, ref);
+      }
+      for (final m in apiPath.allMatches(js)) {
+        paths.add(m.group(1)!);
+      }
+      for (final m in keyword.allMatches(js)) {
+        final list = snippets[m.group(0)!.toLowerCase()]!;
+        if (list.length >= 30) continue;
+        final a = (m.start - 300).clamp(0, js.length);
+        final b = (m.end + 300).clamp(0, js.length);
+        final win = js.substring(a, b);
+        if (!apiHint.hasMatch(win)) continue;
+        final norm = win.replaceAll(RegExp(r'\s+'), ' ');
+        final core = norm.substring(
+            (norm.length ~/ 2 - 40).clamp(0, norm.length),
+            (norm.length ~/ 2 + 40).clamp(0, norm.length));
+        if (list.any((x) => x.contains(core))) continue;
+        list.add(norm);
+      }
+    }
+    out.writeln('스크립트 $files개, '
+        '${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB 분석');
+    out.writeln('\n===== API 경로 (${paths.length}) =====');
+    for (final p in paths.toList()..sort()) {
+      out.writeln(p);
+    }
+    for (final k in ['pull', 'recreate']) {
+      out.writeln('\n===== "$k" 주변 코드 (${snippets[k]!.length}) =====');
+      for (final s in snippets[k]!) {
+        out.writeln('… $s …\n');
+      }
+    }
+    return out.toString();
+  }
+
   /// 진단 화면용: 로그인과 각 목록 경로의 원본 응답
   Future<String> diagnose() async {
     final b = StringBuffer();

@@ -168,6 +168,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onTap: () => Navigator.push(context,
               MaterialPageRoute(builder: (_) => const DiagnosticsScreen())),
         ),
+        ListTile(
+          leading: const Icon(Icons.travel_explore),
+          title: const Text('Container Station 화면 분석'),
+          subtitle: const Text('이미지 당기기·재생성 요청 형식을 NAS 화면 코드에서 찾습니다 (읽기만 함)'),
+          enabled: app.client != null,
+          onTap: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const CsAnalyzeScreen())),
+        ),
       ]),
     );
   }
@@ -268,6 +276,84 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             ),
           ),
       ]),
+    );
+  }
+}
+
+/// Container Station 웹 화면 코드에서 API 형식을 찾아 보여준다.
+class CsAnalyzeScreen extends StatefulWidget {
+  const CsAnalyzeScreen({super.key});
+
+  @override
+  State<CsAnalyzeScreen> createState() => _CsAnalyzeScreenState();
+}
+
+class _CsAnalyzeScreenState extends State<CsAnalyzeScreen> {
+  String? _result;
+  String _status = '';
+  bool _running = false;
+
+  Future<void> _run() async {
+    setState(() {
+      _running = true;
+      _result = null;
+    });
+    try {
+      _result = await ContainerApi(app.client!).analyzeWebUi(onStatus: (s) {
+        if (mounted) setState(() => _status = s);
+      });
+    } catch (e) {
+      _result = '오류: $e';
+    }
+    final sid = app.client?.sid;
+    if (sid != null && _result != null) {
+      _result = _result!.replaceAll(sid, '<sid>');
+    }
+    if (mounted) setState(() => _running = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Container Station 분석'), actions: [
+        IconButton(
+          tooltip: '복사',
+          icon: const Icon(Icons.copy),
+          onPressed: _result == null
+              ? null
+              : () {
+                  Clipboard.setData(ClipboardData(text: _result!));
+                  showMsg(context, '복사했습니다. 대화창에 붙여넣어 주세요.');
+                },
+        ),
+      ]),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _running ? null : _run,
+        icon: const Icon(Icons.play_arrow),
+        label: Text(_running ? '분석 중…' : '분석 실행'),
+      ),
+      body: _running
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 12),
+              Text(_status),
+            ]))
+          : _result == null
+              ? const Center(
+                  child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                      'NAS의 Container Station 화면 코드를 내려받아 '
+                      '이미지 당기기·재생성에 쓰는 실제 요청 형식을 찾습니다.\n'
+                      'NAS 설정은 바꾸지 않습니다. 1~2분 걸릴 수 있습니다.',
+                      textAlign: TextAlign.center),
+                ))
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
+                  child: SelectableText(_result!,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+                ),
     );
   }
 }
