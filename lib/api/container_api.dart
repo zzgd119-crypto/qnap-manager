@@ -451,16 +451,19 @@ class ContainerApi {
       addRef(indexUri, m.group(1)!);
     }
     final jsRef = RegExp(r'''["'`(]((?:\.{0,2}/)?[\w\-./]+?\.js)["'`)]''');
-    final apiPath = RegExp(
-        r'''["'`]((?:/?container-station)?/?(?:api/)?v[0-9]/[A-Za-z0-9_\-/${}.:?=&]{2,120})["'`]''');
-    final keyword = RegExp(r'recreate|pull', caseSensitive: false);
-    final apiHint = RegExp(r'v[13]/|/api/|PUT|POST|\.put\(|\.post\(|method');
-
-    final paths = <String>{};
-    final snippets = <String, List<String>>{'pull': [], 'recreate': []};
+    // 찾을 대상: 요청 함수가 호출되는 곳(버튼 → 어떤 값을 넘기는지)
+    final terms = <String, RegExp>{
+      'pullImage (이미지 당기기 호출)': RegExp(r'pullImage'),
+      'recreateContainer (컨테이너 재생성 호출)': RegExp(r'recreateContainer'),
+      'apps/…/update (앱 수정·재생성)': RegExp(r'apps/\$\{\w+\}/update|updateApp\b'),
+      'apps/compose': RegExp(r'apps/compose|createApp\b|composeApp\b'),
+      'recreate 일반': RegExp(r'[Rr]ecreate'),
+      'pull 옵션': RegExp(r'pull(Image|Latest|Policy|_policy|:)', caseSensitive: false),
+    };
+    final snippets = {for (final k in terms.keys) k: <String>[]};
     var totalBytes = 0;
     var files = 0;
-    while (queue.isNotEmpty && files < 80 && totalBytes < 40 * 1024 * 1024) {
+    while (queue.isNotEmpty && files < 300 && totalBytes < 60 * 1024 * 1024) {
       final u = queue.removeAt(0);
       files++;
       onStatus?.call('스크립트 $files개 분석 중… '
@@ -478,33 +481,27 @@ class ContainerApi {
         final ref = m.group(1)!;
         if (ref.contains('/')) addRef(u, ref);
       }
-      for (final m in apiPath.allMatches(js)) {
-        paths.add(m.group(1)!);
-      }
-      for (final m in keyword.allMatches(js)) {
-        final list = snippets[m.group(0)!.toLowerCase()]!;
-        if (list.length >= 30) continue;
-        final a = (m.start - 300).clamp(0, js.length);
-        final b = (m.end + 300).clamp(0, js.length);
-        final win = js.substring(a, b);
-        if (!apiHint.hasMatch(win)) continue;
-        final norm = win.replaceAll(RegExp(r'\s+'), ' ');
-        final core = norm.substring(
-            (norm.length ~/ 2 - 40).clamp(0, norm.length),
-            (norm.length ~/ 2 + 40).clamp(0, norm.length));
-        if (list.any((x) => x.contains(core))) continue;
-        list.add(norm);
+      for (final e in terms.entries) {
+        final list = snippets[e.key]!;
+        for (final m in e.value.allMatches(js)) {
+          if (list.length >= 12) break;
+          final a = (m.start - 450).clamp(0, js.length);
+          final b = (m.end + 450).clamp(0, js.length);
+          final norm = js.substring(a, b).replaceAll(RegExp(r'\s+'), ' ');
+          final core = norm.substring(
+              (norm.length ~/ 2 - 60).clamp(0, norm.length),
+              (norm.length ~/ 2 + 60).clamp(0, norm.length));
+          // 이미 다른 항목에 같은 부분이 있으면 건너뜀
+          if (snippets.values.any((l) => l.any((x) => x.contains(core)))) continue;
+          list.add(norm);
+        }
       }
     }
     out.writeln('스크립트 $files개, '
         '${(totalBytes / 1024 / 1024).toStringAsFixed(1)} MB 분석');
-    out.writeln('\n===== API 경로 (${paths.length}) =====');
-    for (final p in paths.toList()..sort()) {
-      out.writeln(p);
-    }
-    for (final k in ['pull', 'recreate']) {
-      out.writeln('\n===== "$k" 주변 코드 (${snippets[k]!.length}) =====');
-      for (final s in snippets[k]!) {
+    for (final e in snippets.entries) {
+      out.writeln('\n===== ${e.key} (${e.value.length}) =====');
+      for (final s in e.value) {
         out.writeln('… $s …\n');
       }
     }
