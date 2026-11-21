@@ -1,0 +1,6 @@
+{
+  "version": "1.0.7",
+  "commit": "fc9f10e",
+  "message": "최신 이미지로 재생성: yml에 pull_policy: always 를 넣어 Compose가 이미지를 받도록 변경",
+  "date": "2026-11-20T05:06:51+00:00"
+}

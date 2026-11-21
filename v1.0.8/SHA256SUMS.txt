@@ -1,0 +1,2 @@
+fb8d3122352b54fb56515780236de8a63346ff9aecbf43a2cbd55e11f8b22b19  qnap-manager-android.apk
+fb318b7268fcde49c03a9fd6056d08b9a59ed8f1e90dd1d897dc4cf898065c63  qnap-manager-windows.zip
