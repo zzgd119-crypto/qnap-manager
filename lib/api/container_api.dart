@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import '../util/compose_yaml.dart';
 import 'qnap_client.dart';
 
 class ContainerInfo {
@@ -242,7 +241,10 @@ class ContainerApi {
     return body;
   }
 
-  // ---------------- 이미지 당기기 / 애플리케이션 재생성 ----------------
+  // ---------------- 이미지 당기기 / 컨테이너 재생성 ----------------
+  // Container Station 3 웹 화면이 보내는 요청과 똑같이 보낸다 (NAS 화면 코드 분석으로 확인).
+  //   이미지 당기기:   POST api/v3/images/{type}/pull        {image: "이름:태그", rememberme: false}
+  //   컨테이너 재생성: POST api/v3/containers/{type}/recreate {id, pull, commit: false}
 
   /// "ghcr.io/a/b:latest" → ("ghcr.io/a/b", "latest")
   static (String, String) splitImage(String image) {
@@ -256,95 +258,42 @@ class ContainerApi {
     return (base, 'latest');
   }
 
-  int? _pullPattern;
-
-  static List<(String, Object)> _pullCandidates(String image) {
+  /// 이미지를 레지스트리에서 다시 받는다 (Container Station 의 "이미지 당기기").
+  Future<void> pullImage(String image,
+      {String type = 'docker',
+      void Function(int progress, String text)? onUpdate}) async {
     final (repo, tag) = splitImage(image);
-    final slash = repo.indexOf('/');
-    final hasRegistry = slash > 0 &&
-        (repo.substring(0, slash).contains('.') ||
-            repo.substring(0, slash).contains(':'));
-    return [
-      ('/v3/images/pull', {'image': '$repo:$tag'}),
-      ('/v3/images/pull', {'data': {'image': repo, 'tag': tag}}),
-      ('/v1/background/image_download', {
-        'type': 'docker',
-        'repository': hasRegistry ? repo.substring(0, slash) : '',
-        'image': hasRegistry ? repo.substring(slash + 1) : repo,
-        'tag': tag,
-      }),
-    ];
+    final started = DateTime.now();
+    final res = await _request('POST', '/v3/images/$type/pull',
+        body: {'image': '$repo:$tag', 'rememberme': false});
+    await _waitBackground(
+        category: 'imagepull',
+        hint: repo.split('/').last,
+        since: started,
+        taskId: _taskId(res.body),
+        onUpdate: onUpdate);
   }
 
-  /// 이미지를 레지스트리에서 다시 받는다. 작업 ID가 있으면 반환한다.
-  Future<String?> pullImage(String image) async {
-    if (_prefix == null) await _connect();
-    final cands = _pullCandidates(image);
-    final order = _pullPattern == null
-        ? List.generate(cands.length, (i) => i)
-        : [_pullPattern!, ...List.generate(cands.length, (i) => i)];
-    final tried = <String>[];
-    for (final i in order.toSet()) {
-      final (path, body) = cands[i];
-      var res = await _send('POST', '$_prefix$path', body: body);
-      if (res.statusCode == 401 || res.statusCode == 403) {
-        await _login(_prefix!);
-        res = await _send('POST', '$_prefix$path', body: body);
-      }
-      if (res.statusCode == 404 || res.statusCode == 405) {
-        tried.add('$path → ${res.statusCode}');
-        continue;
-      }
-      if (res.statusCode == 400 && i < cands.length - 1) {
-        tried.add('$path → 400 ${_short(res.body)}');
-        continue; // 형식이 다를 수 있어 다음 후보로
-      }
-      if (res.statusCode >= 400) {
-        throw ApiException(
-            '이미지 당기기 실패 (HTTP ${res.statusCode}) ${_short(res.body)}');
-      }
-      _pullPattern = i;
-      return _taskId(res.body);
+  /// 컨테이너를 같은 설정으로 다시 만든다 (Container Station 의 "재생성").
+  /// [pull] 이면 최신 이미지를 먼저 받는다. 볼륨 데이터는 유지된다.
+  Future<void> recreateContainer(ContainerInfo ct,
+      {required bool pull,
+      void Function(int progress, String text)? onUpdate}) async {
+    final started = DateTime.now();
+    final res = await _request('POST', '/v3/containers/${ct.type}/recreate',
+        body: {'pull': pull, 'commit': false, 'id': ct.id});
+    await _waitBackground(
+        category: 'containerrecreate',
+        hint: ct.name,
+        since: started,
+        taskId: _taskId(res.body),
+        onUpdate: onUpdate);
+    // 재생성 뒤에도 같은 이름의 컨테이너가 있는지 확인
+    final after = await list();
+    if (!after.any((c) => c.name == ct.name)) {
+      throw ApiException('재생성 후 ${ct.name} 컨테이너가 보이지 않습니다. '
+          'Container Station에서 상태를 확인해 주세요.');
     }
-    throw ApiException('이 Container Station 버전의 이미지 당기기 API를 찾지 못했습니다.\n'
-        '${tried.join('\n')}');
-  }
-
-  /// 애플리케이션(compose) 정보: yml, 리소스 제한, 기본 URL
-  Future<Map> inspectApp(String name) async {
-    final res = await _request(
-        'GET', '/v3/apps/${Uri.encodeComponent(name)}/inspect');
-    final j = jsonDecode(utf8.decode(res.bodyBytes));
-    final d = j is Map ? (j['data'] ?? j) : null;
-    if (d is! Map || d['yml'] == null) {
-      throw ApiException('애플리케이션 정보를 읽지 못했습니다: ${_short(res.body)}');
-    }
-    return d;
-  }
-
-  /// Container Station 의 "재생성"과 같다: 현재 yml 로 애플리케이션을 다시 만든다.
-  /// [pullLatest] 이면 yml 의 서비스에 pull_policy: always 를 넣어
-  /// 재생성하면서 최신 이미지를 받게 한다 (yml 에 그대로 저장됨).
-  Future<String?> recreateApp(String name, {bool pullLatest = false}) async {
-    final d = await inspectApp(name);
-    var yml = '${d['yml']}';
-    if (pullLatest) yml = ensurePullAlways(yml);
-    final url = d['defaultURL'] is Map ? d['defaultURL'] as Map : const {};
-    final body = {
-      'name': name,
-      'yml': yml,
-      'operation': 'recreate',
-      'default_url': {
-        'port': url['port'] ?? 0,
-        'service': url['service'] ?? '',
-      },
-      'cpu_limit': d['cpuLimit'] ?? 0,
-      'mem_limit': d['memLimit'] ?? 0,
-      'mem_reservation': d['memReservation'] ?? 0,
-      'last_updated': '${d['lastUpdated'] ?? d['last_updated'] ?? ''}',
-    };
-    final res = await _request('POST', '/v3/apps/compose', body: body);
-    return _taskId(res.body);
   }
 
   static String? _taskId(String body) {
@@ -360,32 +309,50 @@ class ContainerApi {
     return null;
   }
 
-  /// 백그라운드 작업이 끝날 때까지 기다린다. onUpdate(진행률, 설명)
-  Future<void> waitTask(String taskId,
-      {void Function(int progress, String text)? onUpdate,
-      Duration timeout = const Duration(minutes: 20)}) async {
+  /// 백그라운드 작업(api/v3/tasks)이 끝날 때까지 기다린다.
+  /// 작업 ID 를 모르면 종류(category)와 이름으로 찾는다.
+  Future<void> _waitBackground({
+    required String category,
+    required String hint,
+    required DateTime since,
+    String? taskId,
+    void Function(int progress, String text)? onUpdate,
+    Duration timeout = const Duration(minutes: 30),
+  }) async {
     final end = DateTime.now().add(timeout);
-    var notFound = 0;
+    var seen = false;
+    var emptyPolls = 0;
     while (DateTime.now().isBefore(end)) {
+      await Future<void>.delayed(const Duration(seconds: 2));
       final res = await _request('GET', '/v3/tasks');
       final j = jsonDecode(utf8.decode(res.bodyBytes));
       final items = (j is Map && j['data'] is Map ? j['data']['items'] : null)
               as List? ??
           const [];
-      final t = items.whereType<Map>().where((e) => '${e['id']}' == taskId).firstOrNull;
-      if (t == null) {
-        // 끝난 작업은 목록에서 빠지기도 한다. 성공 여부는 호출한 쪽에서 다시 확인한다.
-        if (++notFound >= 3) return;
-      } else {
-        final state = '${t['state']}'.toLowerCase();
-        onUpdate?.call(int.tryParse('${t['progress']}') ?? 0,
-            '${t['description'] ?? ''} ${t['detail'] ?? ''}'.trim());
-        if (state == 'completed' || state == 'done' || state == 'success') return;
-        if (state.contains('fail') || state.contains('error') || state == 'canceled') {
-          throw ApiException('작업 실패: ${t['detail'] ?? t['description'] ?? state}');
-        }
+      final mine = items.whereType<Map>().where((t) {
+        if (taskId != null) return '${t['id']}' == taskId;
+        final cat = '${t['category']}'.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+        final text = '${t['description']} ${t['detail']}'.toLowerCase();
+        return cat.contains(category) || text.contains(hint.toLowerCase());
+      }).toList();
+
+      if (mine.isEmpty) {
+        // 작업이 목록에 안 나타나거나 이미 사라짐 → 몇 번 확인 후 끝난 것으로 봄
+        if (++emptyPolls >= (seen ? 2 : 4)) return;
+        continue;
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
+      seen = true;
+      emptyPolls = 0;
+      final t = mine.first;
+      final state = '${t['state']}'.toLowerCase();
+      onUpdate?.call(int.tryParse('${t['progress']}') ?? 0,
+          '${t['description'] ?? ''} ${t['detail'] ?? ''}'.trim());
+      if (state.contains('fail') || state.contains('error') || state.contains('cancel')) {
+        throw ApiException('작업 실패: ${t['detail'] ?? t['description'] ?? state}');
+      }
+      if (state == 'completed' || state == 'done' || state == 'success' || state == 'finished') {
+        return;
+      }
     }
     throw ApiException('작업이 제한 시간 안에 끝나지 않았습니다 (Container Station에서 확인하세요)');
   }

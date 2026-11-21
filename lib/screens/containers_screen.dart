@@ -6,9 +6,6 @@ import '../api/container_api.dart';
 import '../api/qnap_client.dart';
 import '../widgets/common.dart';
 
-/// 재생성/이미지 당기기는 앱이 삭제되는 문제가 확인되어 정확한 API 확인 전까지 막아 둔다.
-const kRecreateEnabled = false;
-
 class ContainersScreen extends StatefulWidget {
   const ContainersScreen({super.key, required this.client});
   final QnapClient client;
@@ -62,7 +59,8 @@ class _ContainersScreenState extends State<ContainersScreen> {
   // ---------- 이미지 당기기 / 재생성 ----------
 
   /// 여러 단계 작업을 진행 상황 창과 함께 실행한다.
-  Future<void> _runSteps(String title, List<(String, Future<String?> Function())> steps) async {
+  Future<void> _runSteps(String title,
+      List<(String, Future<void> Function(void Function(int, String)))> steps) async {
     final status = ValueNotifier<(String, double?)>(('준비 중…', null));
     var closed = false;
     unawaited(showDialog(
@@ -89,15 +87,12 @@ class _ContainersScreenState extends State<ContainersScreen> {
       for (final (i, (label, fn)) in steps.indexed) {
         final prefix = steps.length > 1 ? '(${i + 1}/${steps.length}) ' : '';
         status.value = ('$prefix$label', null);
-        final task = await fn();
-        if (task != null) {
-          await api.waitTask(task, onUpdate: (p, text) {
-            status.value = (
-              '$prefix$label${text.isNotEmpty ? '\n$text' : ''}',
-              p > 0 ? p / 100 : null
-            );
-          });
-        }
+        await fn((p, text) {
+          status.value = (
+            '$prefix$label${text.isNotEmpty ? '\n$text' : ''}',
+            p > 0 ? p / 100 : null
+          );
+        });
       }
     } catch (e) {
       error = e;
@@ -122,74 +117,42 @@ class _ContainersScreenState extends State<ContainersScreen> {
   }
 
   Future<void> _pull(ContainerInfo c) async {
-    if (!kRecreateEnabled) {
-      await showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('일시 중지된 기능'),
-          content: const Text('재생성 중 애플리케이션이 삭제되는 문제가 확인되어 '
-              '이 기능을 잠시 막아 두었습니다.\n\n'
-              '정확한 요청 형식을 확인해 고친 뒤 다시 열겠습니다. '
-              '그동안은 Container Station 화면에서 재생성해 주세요.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
-          ],
-        ),
-      );
-      return;
-    }
     if (!await confirm(context, '이미지 당기기',
-        '${c.image}\n\n레지스트리에서 이 이미지를 다시 받습니다.\n'
+        '${c.image}\n\n레지스트리에서 최신 이미지를 받습니다.\n'
             '실행 중인 컨테이너에 반영하려면 받은 뒤 재생성해야 합니다.',
         ok: '당기기')) {
       return;
     }
     await _runSteps('이미지 당기기', [
-      ('${c.image} 받는 중', () => api.pullImage(c.image)),
+      ('${c.image} 받는 중', (u) => api.pullImage(c.image, type: c.type, onUpdate: u)),
     ]);
   }
 
-  Future<void> _recreate(String app, List<ContainerInfo> members) async {
-    if (!kRecreateEnabled) {
-      await showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('일시 중지된 기능'),
-          content: const Text('재생성 중 애플리케이션이 삭제되는 문제가 확인되어 '
-              '이 기능을 잠시 막아 두었습니다.\n\n'
-              '정확한 요청 형식을 확인해 고친 뒤 다시 열겠습니다. '
-              '그동안은 Container Station 화면에서 재생성해 주세요.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('확인')),
-          ],
-        ),
-      );
-      return;
-    }
+  /// 컨테이너(들)를 같은 설정으로 다시 만든다. 앱이면 소속 컨테이너 전부.
+  Future<void> _recreate(List<ContainerInfo> targets, {String? app}) async {
     var pull = true;
-    final images = members.map((c) => c.image).where((i) => i.isNotEmpty).toSet().toList();
+    final names = targets.map((c) => c.name).join(', ');
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: Text('$app 재생성'),
-          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('현재 설정(yml)으로 애플리케이션의 컨테이너를 다시 만듭니다. '
-                '볼륨에 저장된 데이터는 유지되고, 잠깐 서비스가 중단됩니다.'),
-            const SizedBox(height: 4),
-            Text('이미지: ${images.join(', ')}', style: const TextStyle(fontSize: 12)),
-            const SizedBox(height: 8),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              value: pull,
-              onChanged: (v) => setLocal(() => pull = v ?? false),
-              title: const Text('최신 이미지로 재생성'),
-              subtitle: const Text(
-                  '레지스트리에서 최신 이미지를 받아 재생성합니다. '
-                  '이를 위해 yml의 각 서비스에 pull_policy: always 가 추가됩니다.',
-                  style: TextStyle(fontSize: 12)),
-            ),
-          ]),
+          title: Text('${app ?? targets.first.name} 재생성'),
+          content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$names\n\n같은 설정으로 컨테이너를 다시 만듭니다. '
+                    '볼륨(저장 폴더)의 데이터는 유지되고, 잠깐 서비스가 중단됩니다.'),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: pull,
+                  onChanged: (v) => setLocal(() => pull = v ?? false),
+                  title: const Text('최신 이미지 당기기'),
+                  subtitle: const Text('레지스트리에서 최신 이미지를 받아서 재생성합니다',
+                      style: TextStyle(fontSize: 12)),
+                ),
+              ]),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('취소')),
             FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('재생성')),
@@ -198,9 +161,10 @@ class _ContainersScreenState extends State<ContainersScreen> {
       ),
     );
     if (ok != true) return;
-    await _runSteps('$app 재생성', [
-      (pull ? '최신 이미지 받고 재생성 중' : '$app 재생성 중',
-          () => api.recreateApp(app, pullLatest: pull)),
+    await _runSteps('${app ?? targets.first.name} 재생성', [
+      for (final c in targets)
+        ('${c.name} ${pull ? '최신 이미지 받고 ' : ''}재생성 중',
+            (u) => api.recreateContainer(c, pull: pull, onUpdate: u)),
     ]);
   }
 
@@ -275,7 +239,7 @@ class _ContainersScreenState extends State<ContainersScreen> {
               TextButton.icon(
                 icon: const Icon(Icons.autorenew, size: 18),
                 label: const Text('재생성'),
-                onPressed: () => _recreate(app, apps[app]!),
+                onPressed: () => _recreate(apps[app]!, app: app),
               ),
             ]),
           ),
@@ -327,10 +291,9 @@ class _ContainersScreenState extends State<ContainersScreen> {
                       case 'logs':
                         _logs(c);
                       case 'pull':
-                        // 앱 소속이면 "최신 이미지로 재생성"이 확실한 방법
-                        app != null ? _recreate(app, members!) : _pull(c);
+                        _pull(c);
                       case 'recreate':
-                        _recreate(app!, members!);
+                        _recreate([c]);
                     }
                   },
                   itemBuilder: (_) => [
@@ -345,13 +308,11 @@ class _ContainersScreenState extends State<ContainersScreen> {
                         value: 'pull',
                         child: ListTile(
                             leading: Icon(Icons.cloud_download_outlined),
-                            title: Text('이미지 당기기 (최신 버전으로)'))),
-                    if (app != null)
-                      PopupMenuItem(
-                          value: 'recreate',
-                          child: ListTile(
-                              leading: const Icon(Icons.autorenew),
-                              title: Text('앱 재생성 ($app)'))),
+                            title: Text('이미지 당기기'))),
+                    const PopupMenuItem(
+                        value: 'recreate',
+                        child: ListTile(
+                            leading: Icon(Icons.autorenew), title: Text('재생성'))),
                   ],
                 ),
               ]),

@@ -4,7 +4,6 @@ import 'package:qnap_manager/api/qnap_client.dart';
 import 'package:qnap_manager/api/system_api.dart';
 import 'package:qnap_manager/models/nas_profile.dart';
 import 'package:qnap_manager/update/updater.dart';
-import 'package:qnap_manager/util/compose_yaml.dart';
 import 'package:xml/xml.dart';
 
 void main() {
@@ -101,29 +100,4 @@ void main() {
     expect(ContainerApi.splitImage('nginx@sha256:abc'), ('nginx', 'latest'));
   });
 
-  test('compose yml 에 pull_policy 추가', () {
-    const yml = '''version: "3"
-services:
-  triplog:
-    image: ghcr.io/x/triplog:latest  # 앱
-    ports:
-      - "8000:8000"
-  db:
-    image: postgres:16
-    pull_policy: missing
-volumes:
-  data:
-''';
-    final out = ensurePullAlways(yml);
-    expect(out, contains('''  triplog:
-    pull_policy: always
-    image: ghcr.io/x/triplog:latest  # 앱'''));
-    expect(out, contains('''    image: postgres:16
-    pull_policy: always'''));
-    expect('pull_policy'.allMatches(out).length, 2);
-    expect(out, endsWith('volumes:\n  data:\n'));
-    // 두 번 적용해도 같다
-    expect(ensurePullAlways(out), out);
-    expect(() => ensurePullAlways('foo: 1'), throwsFormatException);
-  });
 }
