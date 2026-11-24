@@ -296,6 +296,52 @@ class ContainerApi {
     }
   }
 
+  /// 애플리케이션 재생성 (Container Station 화면의 Applications → Recreate 와 같은 요청).
+  /// POST api/v3/apps/compose {name, yml, defaultURL?, cpupin, cpuLimit, memLimit,
+  ///   memReservation, operation: "recreate", fromTemplate: null}
+  /// NAS 가 기존 앱 삭제 → 같은 yml 로 생성까지 진행한다. 볼륨 데이터는 유지된다.
+  Future<void> recreateApp(String name,
+      {void Function(int progress, String text)? onUpdate}) async {
+    final res = await _request(
+        'GET', '/v3/apps/${Uri.encodeComponent(name)}/inspect');
+    final j = jsonDecode(utf8.decode(res.bodyBytes));
+    final d = j is Map ? j['data'] : null;
+    if (d is! Map || d['yml'] is! String || (d['yml'] as String).trim().isEmpty) {
+      throw ApiException('애플리케이션 설정(yml)을 읽지 못해 재생성을 중단했습니다.');
+    }
+    final url = d['defaultURL'];
+    final port = url is Map ? int.tryParse('${url['port']}') ?? 0 : 0;
+    final body = <String, Object?>{
+      'name': name,
+      'yml': d['yml'],
+      if (port > 0) 'defaultURL': {'port': port, 'service': url['service'] ?? ''},
+      if (d['cpupin'] != null) 'cpupin': d['cpupin'],
+      'cpuLimit': d['cpuLimit'],
+      'memLimit': d['memLimit'],
+      'memReservation': d['memReservation'],
+      'operation': 'recreate',
+      'fromTemplate': null,
+    };
+    final started = DateTime.now();
+    final r = await _request('POST', '/v3/apps/compose', body: body);
+    await _waitBackground(
+        category: 'compose',
+        hint: name,
+        since: started,
+        taskId: _taskId(r.body),
+        onUpdate: onUpdate);
+    // 다시 만들어질 때까지 최대 3분 확인
+    final end = DateTime.now().add(const Duration(minutes: 3));
+    while (DateTime.now().isBefore(end)) {
+      final now = await list();
+      if (now.any((c) => c.project == name)) return;
+      await Future<void>.delayed(const Duration(seconds: 5));
+    }
+    throw ApiException('재생성 후 $name 앱의 컨테이너가 보이지 않습니다.\n'
+        'Container Station → Applications에서 확인해 주세요.\n\n'
+        '복구용 yml:\n${d['yml']}');
+  }
+
   static String? _taskId(String body) {
     try {
       final j = jsonDecode(body);

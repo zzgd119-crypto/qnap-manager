@@ -128,29 +128,28 @@ class _ContainersScreenState extends State<ContainersScreen> {
     ]);
   }
 
-  /// 컨테이너(들)를 같은 설정으로 다시 만든다. 앱이면 소속 컨테이너 전부.
-  Future<void> _recreate(List<ContainerInfo> targets, {String? app}) async {
+  /// 애플리케이션 재생성 (Container Station 의 Applications → Recreate 와 같음).
+  Future<void> _recreate(String app, List<ContainerInfo> members) async {
     var pull = true;
-    final names = targets.map((c) => c.name).join(', ');
+    final images = members.map((c) => c.image).where((i) => i.isNotEmpty).toSet().toList();
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: Text('${app ?? targets.first.name} 재생성'),
+          title: Text('$app 재생성'),
           content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('$names\n\n같은 설정으로 컨테이너를 다시 만듭니다. '
+                const Text('현재 설정(yml) 그대로 애플리케이션을 다시 만듭니다. '
                     '볼륨(저장 폴더)의 데이터는 유지되고, 잠깐 서비스가 중단됩니다.'),
                 const SizedBox(height: 8),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   value: pull,
                   onChanged: (v) => setLocal(() => pull = v ?? false),
-                  title: const Text('최신 이미지 당기기'),
-                  subtitle: const Text('레지스트리에서 최신 이미지를 받아서 재생성합니다',
-                      style: TextStyle(fontSize: 12)),
+                  title: const Text('최신 이미지 먼저 당기기'),
+                  subtitle: Text(images.join('\n'), style: const TextStyle(fontSize: 12)),
                 ),
               ]),
           actions: [
@@ -161,10 +160,11 @@ class _ContainersScreenState extends State<ContainersScreen> {
       ),
     );
     if (ok != true) return;
-    await _runSteps('${app ?? targets.first.name} 재생성', [
-      for (final c in targets)
-        ('${c.name} ${pull ? '최신 이미지 받고 ' : ''}재생성 중',
-            (u) => api.recreateContainer(c, pull: pull, onUpdate: u)),
+    await _runSteps('$app 재생성', [
+      if (pull)
+        for (final img in images)
+          ('$img 받는 중', (u) => api.pullImage(img, onUpdate: u)),
+      ('$app 재생성 중', (u) => api.recreateApp(app, onUpdate: u)),
     ]);
   }
 
@@ -239,7 +239,7 @@ class _ContainersScreenState extends State<ContainersScreen> {
               TextButton.icon(
                 icon: const Icon(Icons.autorenew, size: 18),
                 label: const Text('재생성'),
-                onPressed: () => _recreate(apps[app]!, app: app),
+                onPressed: () => _recreate(app, apps[app]!),
               ),
             ]),
           ),
@@ -293,7 +293,7 @@ class _ContainersScreenState extends State<ContainersScreen> {
                       case 'pull':
                         _pull(c);
                       case 'recreate':
-                        _recreate([c]);
+                        _recreate(app!, members!);
                     }
                   },
                   itemBuilder: (_) => [
@@ -309,10 +309,12 @@ class _ContainersScreenState extends State<ContainersScreen> {
                         child: ListTile(
                             leading: Icon(Icons.cloud_download_outlined),
                             title: Text('이미지 당기기'))),
-                    const PopupMenuItem(
-                        value: 'recreate',
-                        child: ListTile(
-                            leading: Icon(Icons.autorenew), title: Text('재생성'))),
+                    if (app != null)
+                      PopupMenuItem(
+                          value: 'recreate',
+                          child: ListTile(
+                              leading: const Icon(Icons.autorenew),
+                              title: Text('앱 재생성 ($app)'))),
                   ],
                 ),
               ]),
