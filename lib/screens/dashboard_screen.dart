@@ -135,8 +135,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
-            leading: Icon(d.isGood ? Icons.check_circle : Icons.warning_amber,
-                color: d.isGood ? Colors.green : Colors.orange),
+            leading: switch (d.level) {
+              0 => const Icon(Icons.check_circle, color: Colors.green),
+              1 => const Icon(Icons.warning_amber, color: Colors.orange),
+              2 => const Icon(Icons.error, color: Colors.red),
+              _ => const Icon(Icons.help_outline, color: Colors.grey),
+            },
             title: Text('${d.alias}  ${d.model}'),
             subtitle: Text(
                 '${d.health}${d.tempC != null ? ' · ${d.tempC}°C' : ''}${d.capacity.isNotEmpty ? ' · ${d.capacity}' : ''}'),

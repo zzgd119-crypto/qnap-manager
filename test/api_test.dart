@@ -100,4 +100,13 @@ void main() {
     expect(ContainerApi.splitImage('nginx@sha256:abc'), ('nginx', 'latest'));
   });
 
+
+  test('디스크 상태 판정', () {
+    DiskInfo d(String h) => DiskInfo('HDD', 'M', h, 40, '8 TB');
+    expect(d('OK').level, 0);
+    expect(d('Good').level, 0);
+    expect(d('Warning').level, 1);
+    expect(d('Abnormal').level, 2);
+    expect(d('--').level, -1);
+  });
 }

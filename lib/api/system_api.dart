@@ -52,7 +52,16 @@ class DiskInfo {
   final String health;
   final int? tempC;
   final String capacity;
-  bool get isGood => health.toLowerCase().contains('good') || health == '정상';
+  /// 0 정상, 1 경고, 2 오류, -1 알 수 없음
+  int get level {
+    final h = health.toLowerCase().trim();
+    if (RegExp(r'^(ok|good|normal|정상)').hasMatch(h)) return 0;
+    if (h.contains('warn') || h.contains('경고')) return 1;
+    if (RegExp(r'error|abnormal|fail|bad|오류|비정상').hasMatch(h)) return 2;
+    return -1;
+  }
+
+  bool get isGood => level == 0;
 }
 
 double _num(String? s) {
