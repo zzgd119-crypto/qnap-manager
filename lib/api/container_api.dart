@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -46,13 +47,14 @@ class ContainerApi {
     };
   }
 
-  Future<http.Response> _send(String method, String url, {Object? body}) async {
+  Future<http.Response> _send(String method, String url,
+      {Object? body, Duration timeout = const Duration(seconds: 30)}) async {
     final req = http.Request(method, Uri.parse('${c.baseUrl}$url'))
       ..headers.addAll(_headers);
     if (body != null) req.body = jsonEncode(body);
     final streamed =
-        await c.client.send(req).timeout(const Duration(seconds: 30));
-    return http.Response.fromStream(streamed);
+        await c.client.send(req).timeout(timeout);
+    return http.Response.fromStream(streamed).timeout(timeout);
   }
 
   Future<void> _login(String prefix) async {
@@ -103,9 +105,9 @@ class ContainerApi {
 
   /// 연결 후 요청. 401이면 한 번 다시 로그인한다.
   Future<http.Response> _request(String method, String path,
-      {Object? body}) async {
+      {Object? body, Duration timeout = const Duration(seconds: 30)}) async {
     if (_prefix == null) await _connect();
-    var res = await _send(method, '$_prefix$path', body: body);
+    var res = await _send(method, '$_prefix$path', body: body, timeout: timeout);
     if (res.statusCode == 401 || res.statusCode == 403) {
       await _login(_prefix!);
       res = await _send(method, '$_prefix$path', body: body);
@@ -339,14 +341,22 @@ class ContainerApi {
     };
     final started = DateTime.now();
     final before = await _existingTaskIds();
-    final r = await _request('POST', '/v3/apps/compose', body: body);
+    String rBody = '';
+    try {
+      // NAS 는 기존 앱 삭제가 끝난 뒤 응답한다 (30초 이상 걸릴 수 있음)
+      final r = await _request('POST', '/v3/apps/compose',
+          body: body, timeout: const Duration(minutes: 10));
+      rBody = r.body;
+    } on TimeoutException {
+      // 응답이 늦어도 NAS 는 계속 진행 중 → 아래에서 실제 상태로 판단
+    }
     Object? taskError;
     try {
       await _waitBackground(
           category: 'compose',
           hint: name,
           since: started,
-          taskId: _taskId(r.body),
+          taskId: _taskId(rBody),
           ignoreIds: before,
           onUpdate: onUpdate);
     } catch (e) {
