@@ -362,11 +362,15 @@ class ContainerApi {
     } catch (e) {
       taskError = e; // 아래에서 실제 컨테이너 상태로 최종 판단
     }
-    // 다시 만들어질 때까지 최대 3분 확인
-    final end = DateTime.now().add(const Duration(minutes: 3));
+    // 다시 만들어질 때까지 최대 5분 확인
+    final end = DateTime.now().add(const Duration(minutes: 5));
     while (DateTime.now().isBefore(end)) {
-      final now = await list();
-      if (now.any((c) => c.project == name && c.running)) return;
+      try {
+        final now = await list();
+        if (now.any((c) => c.project == name && c.running)) return;
+      } catch (_) {
+        // 일시적인 연결 오류는 무시하고 다시 확인
+      }
       await Future<void>.delayed(const Duration(seconds: 5));
     }
     throw ApiException('${taskError != null ? '$taskError\n\n' : ''}'
@@ -416,8 +420,15 @@ class ContainerApi {
     var emptyPolls = 0;
     while (DateTime.now().isBefore(end)) {
       await Future<void>.delayed(const Duration(seconds: 2));
-      final res = await _request('GET', '/v3/tasks');
-      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      dynamic j;
+      try {
+        final res = await _request('GET', '/v3/tasks');
+        j = jsonDecode(utf8.decode(res.bodyBytes));
+      } catch (_) {
+        // 작업 중 NAS 가 바쁘거나 연결이 잠깐 끊길 수 있다 → 계속 확인
+        await Future<void>.delayed(const Duration(seconds: 3));
+        continue;
+      }
       final items = (j is Map && j['data'] is Map ? j['data']['items'] : null)
               as List? ??
           const [];
