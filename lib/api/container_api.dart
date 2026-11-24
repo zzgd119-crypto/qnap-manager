@@ -361,7 +361,8 @@ class ContainerApi {
 
   /// NAS 의 Container Station 웹 화면(JS)을 내려받아, 이미지 Pull·재생성 등에 쓰는
   /// 실제 API 경로와 요청 형식을 찾는다. GET 요청만 보낸다.
-  Future<String> analyzeWebUi({void Function(String)? onStatus}) async {
+  Future<String> analyzeWebUi(
+      {List<String>? searchTerms, void Function(String)? onStatus}) async {
     final out = StringBuffer('Container Station 화면 분석\n');
     if (_prefix == null) {
       try {
@@ -420,12 +421,8 @@ class ContainerApi {
     final jsRef = RegExp(r'''["'`(]((?:\.{0,2}/)?[\w\-./]+?\.js)["'`)]''');
     // 찾을 대상: 요청 함수가 호출되는 곳(버튼 → 어떤 값을 넘기는지)
     final terms = <String, RegExp>{
-      'pullImage (이미지 당기기 호출)': RegExp(r'pullImage'),
-      'recreateContainer (컨테이너 재생성 호출)': RegExp(r'recreateContainer'),
-      'apps/…/update (앱 수정·재생성)': RegExp(r'apps/\$\{\w+\}/update|updateApp\b'),
-      'apps/compose': RegExp(r'apps/compose|createApp\b|composeApp\b'),
-      'recreate 일반': RegExp(r'[Rr]ecreate'),
-      'pull 옵션': RegExp(r'pull(Image|Latest|Policy|_policy|:)', caseSensitive: false),
+      for (final t in (searchTerms ?? const ['createApplication', 'removeApplication', 'isRecreate']))
+        if (t.trim().isNotEmpty) t.trim(): RegExp(RegExp.escape(t.trim())),
     };
     final snippets = {for (final k in terms.keys) k: <String>[]};
     var totalBytes = 0;
@@ -451,10 +448,12 @@ class ContainerApi {
       for (final e in terms.entries) {
         final list = snippets[e.key]!;
         for (final m in e.value.allMatches(js)) {
-          if (list.length >= 12) break;
-          final a = (m.start - 450).clamp(0, js.length);
-          final b = (m.end + 450).clamp(0, js.length);
+          if (list.length >= 8) break;
+          final a = (m.start - 600).clamp(0, js.length);
+          final b = (m.end + 600).clamp(0, js.length);
           final norm = js.substring(a, b).replaceAll(RegExp(r'\s+'), ' ');
+          final nonAscii = norm.runes.where((r) => r > 127).length;
+          if (nonAscii > norm.length * 0.1) continue; // 번역 문구 건너뜀
           final core = norm.substring(
               (norm.length ~/ 2 - 60).clamp(0, norm.length),
               (norm.length ~/ 2 + 60).clamp(0, norm.length));

@@ -289,6 +289,8 @@ class CsAnalyzeScreen extends StatefulWidget {
 }
 
 class _CsAnalyzeScreenState extends State<CsAnalyzeScreen> {
+  final _terms = TextEditingController(
+      text: 'createApplication, removeApplication, isRecreate');
   String? _result;
   String _status = '';
   bool _running = false;
@@ -299,7 +301,8 @@ class _CsAnalyzeScreenState extends State<CsAnalyzeScreen> {
       _result = null;
     });
     try {
-      _result = await ContainerApi(app.client!).analyzeWebUi(onStatus: (s) {
+      _result = await ContainerApi(app.client!).analyzeWebUi(
+          searchTerms: _terms.text.split(','), onStatus: (s) {
         if (mounted) setState(() => _status = s);
       });
     } catch (e) {
@@ -340,14 +343,23 @@ class _CsAnalyzeScreenState extends State<CsAnalyzeScreen> {
               Text(_status),
             ]))
           : _result == null
-              ? const Center(
+              ? Center(
                   child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    TextField(
+                      controller: _terms,
+                      decoration: const InputDecoration(
+                          labelText: '찾을 단어 (쉼표로 구분)',
+                          border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
                       'NAS의 Container Station 화면 코드를 내려받아 '
                       '이미지 당기기·재생성에 쓰는 실제 요청 형식을 찾습니다.\n'
                       'NAS 설정은 바꾸지 않습니다. 1~2분 걸릴 수 있습니다.',
                       textAlign: TextAlign.center),
+                  ]),
                 ))
               : SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
