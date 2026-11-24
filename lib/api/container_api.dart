@@ -309,8 +309,9 @@ class ContainerApi {
     if (d is! Map || d['yml'] is! String || (d['yml'] as String).trim().isEmpty) {
       throw ApiException('애플리케이션 설정(yml)을 읽지 못해 재생성을 중단했습니다.');
     }
-    // 화면은 이 값들을 항상 채워 보낸다. 하나라도 없으면 삭제 전에 멈춘다 (앱 삭제 방지).
-    final missing = ['cpupin', 'cpuLimit', 'memLimit', 'memReservation']
+    // 리소스 제한 값(-1 = 제한 없음)이 없으면 삭제 전에 멈춘다 (앱 삭제 방지).
+    // cpupin 은 CPU 고정을 안 쓰는 NAS 에서 null 이며, 화면도 앱 정보 값을 그대로 보낸다.
+    final missing = ['cpuLimit', 'memLimit', 'memReservation']
         .where((k) => d[k] == null)
         .toList();
     if (missing.isNotEmpty) {
