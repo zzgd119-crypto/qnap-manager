@@ -309,13 +309,23 @@ class ContainerApi {
     if (d is! Map || d['yml'] is! String || (d['yml'] as String).trim().isEmpty) {
       throw ApiException('애플리케이션 설정(yml)을 읽지 못해 재생성을 중단했습니다.');
     }
+    // 화면은 이 값들을 항상 채워 보낸다. 하나라도 없으면 삭제 전에 멈춘다 (앱 삭제 방지).
+    final missing = ['cpupin', 'cpuLimit', 'memLimit', 'memReservation']
+        .where((k) => d[k] == null)
+        .toList();
+    if (missing.isNotEmpty) {
+      final info = Map.of(d)..remove('yml');
+      throw ApiException('재생성을 보내지 않았습니다 (앱은 그대로입니다).\n'
+          '앱 정보에 ${missing.join(', ')} 값이 없습니다. 아래 내용을 보내 주세요.\n\n'
+          '${jsonEncode(info)}');
+    }
     final url = d['defaultURL'];
     final port = url is Map ? int.tryParse('${url['port']}') ?? 0 : 0;
     final body = <String, Object?>{
       'name': name,
       'yml': d['yml'],
       if (port > 0) 'defaultURL': {'port': port, 'service': url['service'] ?? ''},
-      if (d['cpupin'] != null) 'cpupin': d['cpupin'],
+      'cpupin': d['cpupin'],
       'cpuLimit': d['cpuLimit'],
       'memLimit': d['memLimit'],
       'memReservation': d['memReservation'],
