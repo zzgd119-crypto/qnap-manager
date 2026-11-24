@@ -264,6 +264,7 @@ class ContainerApi {
       void Function(int progress, String text)? onUpdate}) async {
     final (repo, tag) = splitImage(image);
     final started = DateTime.now();
+    final before = await _existingTaskIds();
     final res = await _request('POST', '/v3/images/$type/pull',
         body: {'image': '$repo:$tag', 'rememberme': false});
     await _waitBackground(
@@ -271,6 +272,7 @@ class ContainerApi {
         hint: repo.split('/').last,
         since: started,
         taskId: _taskId(res.body),
+        ignoreIds: before,
         onUpdate: onUpdate);
   }
 
@@ -280,6 +282,7 @@ class ContainerApi {
       {required bool pull,
       void Function(int progress, String text)? onUpdate}) async {
     final started = DateTime.now();
+    final before = await _existingTaskIds();
     final res = await _request('POST', '/v3/containers/${ct.type}/recreate',
         body: {'pull': pull, 'commit': false, 'id': ct.id});
     await _waitBackground(
@@ -287,6 +290,7 @@ class ContainerApi {
         hint: ct.name,
         since: started,
         taskId: _taskId(res.body),
+        ignoreIds: before,
         onUpdate: onUpdate);
     // 재생성 뒤에도 같은 이름의 컨테이너가 있는지 확인
     final after = await list();
@@ -334,23 +338,43 @@ class ContainerApi {
       'fromTemplate': null,
     };
     final started = DateTime.now();
+    final before = await _existingTaskIds();
     final r = await _request('POST', '/v3/apps/compose', body: body);
-    await _waitBackground(
-        category: 'compose',
-        hint: name,
-        since: started,
-        taskId: _taskId(r.body),
-        onUpdate: onUpdate);
+    Object? taskError;
+    try {
+      await _waitBackground(
+          category: 'compose',
+          hint: name,
+          since: started,
+          taskId: _taskId(r.body),
+          ignoreIds: before,
+          onUpdate: onUpdate);
+    } catch (e) {
+      taskError = e; // 아래에서 실제 컨테이너 상태로 최종 판단
+    }
     // 다시 만들어질 때까지 최대 3분 확인
     final end = DateTime.now().add(const Duration(minutes: 3));
     while (DateTime.now().isBefore(end)) {
       final now = await list();
-      if (now.any((c) => c.project == name)) return;
+      if (now.any((c) => c.project == name && c.running)) return;
       await Future<void>.delayed(const Duration(seconds: 5));
     }
-    throw ApiException('재생성 후 $name 앱의 컨테이너가 보이지 않습니다.\n'
+    throw ApiException('${taskError != null ? '$taskError\n\n' : ''}'
+        '재생성 후 $name 앱의 컨테이너가 실행 중이 아닙니다.\n'
         'Container Station → Applications에서 확인해 주세요.\n\n'
         '복구용 yml:\n${d['yml']}');
+  }
+
+  /// 요청 전에 이미 있던 작업 ID들 (이전 작업 기록을 이번 결과로 착각하지 않도록)
+  Future<Set<String>> _existingTaskIds() async {
+    try {
+      final res = await _request('GET', '/v3/tasks');
+      final j = jsonDecode(utf8.decode(res.bodyBytes));
+      final items = (j is Map && j['data'] is Map ? j['data']['items'] : null) as List? ?? const [];
+      return {for (final t in items.whereType<Map>()) '${t['id']}'};
+    } catch (_) {
+      return {};
+    }
   }
 
   static String? _taskId(String body) {
@@ -373,6 +397,7 @@ class ContainerApi {
     required String hint,
     required DateTime since,
     String? taskId,
+    Set<String> ignoreIds = const {},
     void Function(int progress, String text)? onUpdate,
     Duration timeout = const Duration(minutes: 30),
   }) async {
@@ -388,6 +413,7 @@ class ContainerApi {
           const [];
       final mine = items.whereType<Map>().where((t) {
         if (taskId != null) return '${t['id']}' == taskId;
+        if (ignoreIds.contains('${t['id']}')) return false;
         final cat = '${t['category']}'.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
         final text = '${t['description']} ${t['detail']}'.toLowerCase();
         return cat.contains(category) || text.contains(hint.toLowerCase());
